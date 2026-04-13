@@ -1,6 +1,0 @@
-<<<<<<< HEAD
-a2ssdsdsassdsdsdsdsdsad
-ds
-=======
-a2ssdsdsassdsdsdsdsdsdds
->>>>>>> feature/test4

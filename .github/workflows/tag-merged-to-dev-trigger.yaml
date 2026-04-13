@@ -1,0 +1,72 @@
+name: Trigger Update PR tags check on PRs
+env:
+  UPDATE_TAGS_WORKFLOW_ID: tag-merged-to-dev.yaml
+  SKIP_RATE_LIMIT_THRESHOLD: 500
+
+on:
+  push:
+    branches:
+      - "dev"
+
+jobs:
+  trigger_update_pr_status_on_prs:
+    runs-on: custom-runner
+    permissions: write-all
+
+    steps:
+      - name: Trigger checks in PRs
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const { data } = await github.rest.rateLimit.get();
+            console.log("Rate limit status:");
+            console.log(`Remaining: ${data.resources.core.remaining}`);
+            console.log(`Reset time: ${new Date(data.resources.core.reset * 1000).toLocaleString()}`);
+
+            if (data.resources.core.remaining < ${{env.SKIP_RATE_LIMIT_THRESHOLD}}) {
+              console.log("Rate limit close to exceeding. Triggers will not be executed. Returning now...")
+              return;
+            }
+
+            const res = await github.rest.pulls.list({ owner, repo, state: 'open', per_page: 100 });
+            const openPullRequests = res.data
+
+            if(openPullRequests.length == 0){
+              console.log("no PR to tag");
+              return;
+            }
+
+            for(const pr of openPullRequests){
+              try {
+                // running PR workflow 'tag-merged-to-dev'
+                response = await github.rest.actions.listWorkflowRuns({
+                    owner,
+                    repo,
+                    workflow_id: "${{env.UPDATE_TAGS_WORKFLOW_ID}}",
+                    event: "pull_request",
+                    head_sha: pr.head.sha
+                });
+                if(response.data.workflow_runs.length > 0) {
+                    latestRunId = response.data.workflow_runs[0].id
+                    const status = response.data.workflow_runs[0].status
+                    if(status == "completed") {
+                      console.log(`Running ${{env.UPDATE_TAGS_WORKFLOW_ID}} workflow on pr ${pr.number}`)
+                      await github.rest.actions.reRunWorkflow({
+                          owner,
+                          repo,
+                          run_id: latestRunId
+                      });
+                    } else {
+                      console.log(`${{env.UPDATE_TAGS_WORKFLOW_ID}} workflow is already ${status} in pr ${pr.number}`)
+                    }
+                } else {
+                    console.log(`${{env.UPDATE_TAGS_WORKFLOW_ID}} workflow does not exist in pr ${pr.number}`)
+                }
+              } catch(e) {
+                console.log(e)
+              }
+            }

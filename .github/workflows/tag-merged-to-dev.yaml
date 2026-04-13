@@ -1,0 +1,105 @@
+name: Update PR Tags
+env:
+  MERGED_TO_BRANCH_TAG: merged-into-dev
+  NOT_MERGED_TO_BRANCH_TAG: not-merged-into-dev
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  update_pr_status:
+    runs-on: custom-runner
+    permissions: write-all
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Check if merged into dev (pr changed)
+        id: git_check
+        run: |
+          git fetch origin
+          git checkout ${{github.head_ref}} && git pull
+          git checkout dev && git pull
+          git config user.name "gha"
+          git config user.email "gha@example.com"
+
+          if git merge ${{github.head_ref}} --no-commit --no-ff; then
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "it is merged into dev"
+              merged_into_dev=1
+            else
+              echo "it is not merged into dev"
+              merged_into_dev=0
+            fi
+          else
+            echo "Automatic merge failed due to conflicts"
+            merged_into_dev=0
+          fi
+          echo "::set-output name=merged_into_dev::$merged_into_dev"
+
+      - name: Evaluate tag to add (pr changed)
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const mergedIntoDev = ${{ steps.git_check.outputs.merged_into_dev }}
+
+
+            try {
+              if(mergedIntoDev){
+                // can fail when trying to remove tag that did not exist (expected)
+                await Promise.allSettled([
+                  github.rest.issues.addLabels({
+                    issue_number: prNumber,
+                    owner,
+                    repo,
+                    labels: ["${{env.MERGED_TO_BRANCH_TAG}}"]
+                  }),
+                  github.rest.issues.removeLabel({
+                    issue_number: prNumber,
+                    owner,
+                    repo,
+                    name: "${{env.NOT_MERGED_TO_BRANCH_TAG}}"
+                  })
+                ]);
+              } else {
+                // can fail when trying to remove tag that did not exist (expected)
+                await Promise.allSettled([
+                  github.rest.issues.addLabels({
+                    issue_number: prNumber,
+                    owner,
+                    repo,
+                    labels: ["${{env.NOT_MERGED_TO_BRANCH_TAG}}"]
+                  }),
+                  github.rest.issues.removeLabel({
+                    issue_number: prNumber,
+                    owner,
+                    repo,
+                    name: "${{env.MERGED_TO_BRANCH_TAG}}"
+                  })
+                ]);
+              }
+            } catch(e){
+              console.log(e);
+            }
+
+      - name: Check if mergeable
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GH_PAT }}
+          script: |
+            const mergedIntoDev = ${{ steps.git_check.outputs.merged_into_dev }}
+
+            if(mergedIntoDev){
+              console.log("This PR is tagged with ${{env.MERGED_TO_BRANCH_TAG}}. Exiting with success status.")
+              process.exit(0);
+            } else {
+              console.log("This PR is tagged with ${{env.NOT_MERGED_TO_BRANCH_TAG}}. Exiting with fail status.")
+              process.exit(1);
+            }
+            console.log("None of the expected labels is present. Exiting with fail status.")
+            process.exit(1)
